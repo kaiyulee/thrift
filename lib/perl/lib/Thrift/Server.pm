@@ -125,7 +125,6 @@ sub _handleException
     }
 }
 
-
 #
 # SimpleServer from the Server base class that handles one connection at a time
 #
@@ -191,6 +190,9 @@ sub serve
 {
     my $self = shift;
 
+    # THRIFT-3848: without ignoring SIGCHLD, perl ForkingServer goes into a tight loop
+    $SIG{CHLD} = 'IGNORE';
+
     $self->{serverTransport}->listen();
     while (1)
     {
@@ -233,10 +235,6 @@ sub _parent
     my $itrans = shift;
     my $otrans = shift;
 
-    # add before collect, otherwise you race w/ waitpid
-    $self->{children}->{$pid} = 1;
-    $self->_collectChildren();
-
     # Parent must close socket or the connection may not get closed promptly
     $self->tryClose($itrans);
     $self->tryClose($otrans);
@@ -252,6 +250,8 @@ sub _child
 
     my $ecode = 0;
     eval {
+        # THRIFT-4065 ensure child process has normal signal handling in case thrift handler uses it
+        $SIG{CHLD} = 'DEFAULT';
         while (1)
         {
             $self->{processor}->process($iprot, $oprot);
@@ -289,25 +289,5 @@ sub tryClose
         }
     }
 }
-
-sub _collectChildren
-{
-    my $self = shift;
-
-    while (scalar keys %{$self->{children}})
-    {
-        my $pid    = waitpid(-1, WNOHANG);
-
-        if ($pid>0)
-        {
-            delete $self->{children}->{$pid};
-        }
-        else
-        {
-            last;
-        }
-    }
-}
-
 
 1;
